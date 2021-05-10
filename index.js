@@ -11,6 +11,11 @@ const expressSession = require("express-session");
 const passport = require("passport");
 const Auth0Strategy = require("passport-auth0");
 
+const request = require('request');
+var cors = require('cors');
+const jwt = require('jsonwebtoken');
+
+const accessTokenSecret = 'youraccesstokensecret';
 
 require("dotenv").config();
 
@@ -94,6 +99,16 @@ passport.deserializeUser((user, done) => {
 // Creating custom middleware with Express
 app.use((req, res, next) => {
   res.locals.isAuthenticated = req.isAuthenticated();
+  if (req.user) {
+    if(typeof(res._headers.authorization) === "undefined") {
+      const accessToken = jwt.sign(req.user._json, accessTokenSecret, {expiresIn: '20m'});
+      res.setHeader('Authorization', 'Bearer ' + accessToken);
+    }
+  }else if (!req.user){
+    try {
+      res.setHeader('Authorization', ' ');
+    }catch{}
+  }
   next();
 });
 
@@ -104,23 +119,50 @@ app.use("/", authRouter);
  * Routes Definitions
  */
 
-const secured = (req, res, next) => {
+const authJWT = (req, res, next) => {
+  console.log("authenticating JWT");
   if (req.user) {
-    return next();
+    const authHeader = res._headers.authorization;
+    console.log(authHeader);
+    if (authHeader) {
+      const token = authHeader.split(' ')[1];
+      jwt.verify(token, accessTokenSecret, (err, user) => {
+        if (err) {
+          return res.sendStatus(403);
+        }
+        req.user = user;
+        next();
+      });
+    } else {
+      res.sendStatus(401);
+    }
+  } else {
+    console.log("Token failed to validate");
+    req.session.returnTo = req.originalUrl;
+    res.redirect("/login");
   }
-  req.session.returnTo = req.originalUrl;
-  res.redirect("/login");
 };
 
 app.get("/", (req, res) => {
   res.render("index", { title: "Home" });
 });
 
-app.get("/user", secured, (req, res, next) => {
+app.get("/user", authJWT, (req, res, next) => {
   const { _raw, _json, ...userProfile } = req.user;
   res.render("user", {
     title: "Profile",
     userProfile: userProfile
+  });
+  next();
+});
+
+app.get('/db', authJWT, function(req, res, next) {
+  request("http://localhost:8000/api/v1/cities", function (err, response, body) {
+    if (err || response.statusCode !== 200) {
+      return res.sendStatus(500);
+    }
+    res.render('db', { title : 'main page', citiesjson : JSON.parse(body).data });
+    next();
   });
 });
 
